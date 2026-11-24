@@ -48,7 +48,7 @@ jobs:
         run: |
           sudo apt-get -qq update && sudo apt-get -qq install -y ffmpeg
           pip install -q edge-tts numpy
-          python3 scripts/make_voice.py "${{ inputs.voice }}" 24 work
+          python3 make_voice.py "${{ inputs.voice }}" 24 work
       - uses: actions/upload-artifact@v4
         with:
           name: voice-bundle
@@ -102,16 +102,16 @@ jobs:
             "$BL" --online-mode -c extension install -s -e mpfb
             curl -fL --retry 3 -o ~/.cache/blender_pack/system_assets.zip http://files.makehumancommunity.org/asset_packs/makehuman_system_assets/makehuman_system_assets_cc0.zip
             curl -fL --retry 3 -o ~/.cache/blender_pack/faceunits01.zip https://files.makehumancommunity.org/functional/faceunits01.zip
-            "$BL" -b -P scripts/mpfb_loadpack.py -- ~/.cache/blender_pack/system_assets.zip
-            "$BL" -b -P scripts/mpfb_loadpack.py -- ~/.cache/blender_pack/faceunits01.zip
+            "$BL" -b -P mpfb_loadpack.py -- ~/.cache/blender_pack/system_assets.zip
+            "$BL" -b -P mpfb_loadpack.py -- ~/.cache/blender_pack/faceunits01.zip
           fi
       - name: Render chunk ${{ matrix.chunk }} and apply film post-processing
         run: |
           BL=~/.cache/blender_pack/blender/blender
-          "$BL" -b -P scripts/build_diamond_short.py -- "${{ inputs.mode }}" "${{ matrix.chunk }}" 12 "${{ inputs.samples }}" "${{ inputs.width }}" "${{ inputs.watermark }}" work
+          "$BL" -b -P build_diamond_short.py -- "${{ inputs.mode }}" "${{ matrix.chunk }}" 12 "${{ inputs.samples }}" "${{ inputs.width }}" "${{ inputs.watermark }}" work
           mkdir -p work/post_out
           for f in work/chunk_out/*.png; do
-            python3 scripts/post.py "$f" "work/post_out/$(basename "$f")" "${{ inputs.watermark }}"
+            python3 post.py "$f" "work/post_out/$(basename "$f")" "${{ inputs.watermark }}"
           done
       - uses: actions/upload-artifact@v4
         with:
@@ -140,7 +140,7 @@ jobs:
         run: |
           sudo apt-get -qq update && sudo apt-get -qq install -y ffmpeg fonts-dejavu-core
           pip install -q pillow
-          python3 scripts/assemble_video.py "${{ inputs.mode }}" 24 work final_output
+          python3 assemble_video.py "${{ inputs.mode }}" 24 work final_output
           cp work/vo.wav final_output/vo.wav
           ls -lh final_output/
       - uses: actions/upload-artifact@v4
