@@ -1,0 +1,150 @@
+name: Render Lab-Grown Diamond 45s 3D Short
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Render mode (test_sheet = 12 preview frames in ~4 min, full_mp4 = full 45s video)"
+        required: true
+        default: "full_mp4"
+        type: choice
+        options:
+          - test_sheet
+          - full_mp4
+      samples:
+        description: "Cycles samples per frame (16 = fast, 24 = sharper)"
+        required: true
+        default: "16"
+        type: string
+      width:
+        description: "Video width (720 = 720x1280, 1080 = 1080x1920)"
+        required: true
+        default: "720"
+        type: string
+      voice:
+        description: "Neural voice"
+        required: true
+        default: "en-US-AndrewMultilingualNeural"
+        type: choice
+        options:
+          - en-US-AndrewMultilingualNeural
+          - en-IN-PrabhatNeural
+          - en-US-BrianMultilingualNeural
+      watermark:
+        description: "3D + frame watermark handle"
+        required: true
+        default: "@always_animate"
+        type: string
+
+jobs:
+  prepare-voice:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Generate voiceover and lip-sync curve
+        run: |
+          sudo apt-get -qq update && sudo apt-get -qq install -y ffmpeg
+          pip install -q edge-tts numpy
+          python3 scripts/make_voice.py "${{ inputs.voice }}" 24 work
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voice-bundle
+          path: |
+            work/vo.wav
+            work/words.json
+            work/talk_curve.json
+          retention-days: 3
+
+  render-chunks:
+    needs: prepare-voice
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: voice-bundle
+          path: work
+      - name: Cache Blender 5.2 and MPFB2 packs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/blender_pack
+            ~/.config/blender/5.2
+          key: blender-5.2.2-mpfb2-v1
+      - name: Install Blender 5.2, MPFB2, and Pillow
+        run: |
+          sudo apt-get -qq update && sudo apt-get -qq install -y libxrender1 libxxf86vm1 libxfixes3 libxi6 libxkbcommon0 libsm6 libgl1 libegl1 fonts-dejavu-core
+          pip install -q pillow numpy
+          mkdir -p ~/.cache/blender_pack
+          if [ ! -d ~/.cache/blender_pack/blender ]; then
+            wget -q -O /tmp/blender.tar.xz https://download.blender.org/release/Blender5.2/blender-5.2.2-linux-x64.tar.xz
+            tar xf /tmp/blender.tar.xz -C ~/.cache/blender_pack
+            mv ~/.cache/blender_pack/blender-5.2.2-linux-x64 ~/.cache/blender_pack/blender
+            rm -f /tmp/blender.tar.xz
+          fi
+          BL=~/.cache/blender_pack/blender/blender
+          BL_PY=$(ls ~/.cache/blender_pack/blender/*/python/bin/python3* | head -n 1)
+          "$BL_PY" -m pip install -q pillow
+          if [ ! -d ~/.config/blender/5.2/extensions/.user/blender_org/mpfb/data/skins ]; then
+            "$BL" -b --python-expr "import bpy; bpy.context.preferences.system.use_online_access = True; bpy.ops.wm.save_userpref()"
+            "$BL" --online-mode -c extension repo-sync --all
+            "$BL" --online-mode -c extension install -s -e mpfb
+            curl -fL --retry 3 -o ~/.cache/blender_pack/system_assets.zip http://files.makehumancommunity.org/asset_packs/makehuman_system_assets/makehuman_system_assets_cc0.zip
+            curl -fL --retry 3 -o ~/.cache/blender_pack/faceunits01.zip https://files.makehumancommunity.org/functional/faceunits01.zip
+            "$BL" -b -P scripts/mpfb_loadpack.py -- ~/.cache/blender_pack/system_assets.zip
+            "$BL" -b -P scripts/mpfb_loadpack.py -- ~/.cache/blender_pack/faceunits01.zip
+          fi
+      - name: Render chunk ${{ matrix.chunk }} and apply film post-processing
+        run: |
+          BL=~/.cache/blender_pack/blender/blender
+          "$BL" -b -P scripts/build_diamond_short.py -- "${{ inputs.mode }}" "${{ matrix.chunk }}" 12 "${{ inputs.samples }}" "${{ inputs.width }}" "${{ inputs.watermark }}" work
+          mkdir -p work/post_out
+          for f in work/chunk_out/*.png; do
+            python3 scripts/post.py "$f" "work/post_out/$(basename "$f")" "${{ inputs.watermark }}"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chunk-${{ matrix.chunk }}
+          path: work/post_out/*.png
+          retention-days: 2
+
+  assemble-final:
+    needs: [prepare-voice, render-chunks]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: voice-bundle
+          path: work
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: chunk-*
+          path: work/frames
+          merge-multiple: true
+      - name: Stitch final MP4 with voiceover and synced captions
+        run: |
+          sudo apt-get -qq update && sudo apt-get -qq install -y ffmpeg fonts-dejavu-core
+          pip install -q pillow
+          python3 scripts/assemble_video.py "${{ inputs.mode }}" 24 work final_output
+          cp work/vo.wav final_output/vo.wav
+          ls -lh final_output/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lab-diamond-short-output
+          path: final_output/
+          retention-days: 14
